@@ -1,0 +1,6 @@
+{
+  "teachers": {
+    "admin@mergington.edu": "password123",
+    "teacher@mergington.edu": "teacher456"
+  }
+}
