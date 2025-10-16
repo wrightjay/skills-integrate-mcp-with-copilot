@@ -5,77 +5,57 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 import os
+import json
 from pathlib import Path
+from typing import Optional
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
 
-# In-memory activity database
-activities = {
-    "Chess Club": {
-        "description": "Learn strategies and compete in chess tournaments",
-        "schedule": "Fridays, 3:30 PM - 5:00 PM",
-        "max_participants": 12,
-        "participants": ["michael@mergington.edu", "daniel@mergington.edu"]
-    },
-    "Programming Class": {
-        "description": "Learn programming fundamentals and build software projects",
-        "schedule": "Tuesdays and Thursdays, 3:30 PM - 4:30 PM",
-        "max_participants": 20,
-        "participants": ["emma@mergington.edu", "sophia@mergington.edu"]
-    },
-    "Gym Class": {
-        "description": "Physical education and sports activities",
-        "schedule": "Mondays, Wednesdays, Fridays, 2:00 PM - 3:00 PM",
-        "max_participants": 30,
-        "participants": ["john@mergington.edu", "olivia@mergington.edu"]
-    },
-    "Soccer Team": {
-        "description": "Join the school soccer team and compete in matches",
-        "schedule": "Tuesdays and Thursdays, 4:00 PM - 5:30 PM",
-        "max_participants": 22,
-        "participants": ["liam@mergington.edu", "noah@mergington.edu"]
-    },
-    "Basketball Team": {
-        "description": "Practice and play basketball with the school team",
-        "schedule": "Wednesdays and Fridays, 3:30 PM - 5:00 PM",
-        "max_participants": 15,
-        "participants": ["ava@mergington.edu", "mia@mergington.edu"]
-    },
-    "Art Club": {
-        "description": "Explore your creativity through painting and drawing",
-        "schedule": "Thursdays, 3:30 PM - 5:00 PM",
-        "max_participants": 15,
-        "participants": ["amelia@mergington.edu", "harper@mergington.edu"]
-    },
-    "Drama Club": {
-        "description": "Act, direct, and produce plays and performances",
-        "schedule": "Mondays and Wednesdays, 4:00 PM - 5:30 PM",
-        "max_participants": 20,
-        "participants": ["ella@mergington.edu", "scarlett@mergington.edu"]
-    },
-    "Math Club": {
-        "description": "Solve challenging problems and participate in math competitions",
-        "schedule": "Tuesdays, 3:30 PM - 4:30 PM",
-        "max_participants": 10,
-        "participants": ["james@mergington.edu", "benjamin@mergington.edu"]
-    },
-    "Debate Team": {
-        "description": "Develop public speaking and argumentation skills",
-        "schedule": "Fridays, 4:00 PM - 5:30 PM",
-        "max_participants": 12,
-        "participants": ["charlotte@mergington.edu", "henry@mergington.edu"]
-    }
-}
+# Load activities from JSON file
+def load_activities():
+    activities_path = os.path.join(current_dir, "activities.json")
+    with open(activities_path, "r") as f:
+        return json.load(f)
+
+# Load teachers from JSON file
+def load_teachers():
+    teachers_path = os.path.join(current_dir, "teachers.json")
+    with open(teachers_path, "r") as f:
+        return json.load(f)
+
+# Save activities to JSON file
+def save_activities(activities_data):
+    activities_path = os.path.join(current_dir, "activities.json")
+    with open(activities_path, "w") as f:
+        json.dump(activities_data, f, indent=2)
+
+# Initialize activities from file
+activities = load_activities()
+teachers_data = load_teachers()
+
+# Verify teacher credentials
+def verify_teacher(email: str, password: str) -> bool:
+    return teachers_data.get("teachers", {}).get(email) == password
 
 
 @app.get("/")
@@ -84,13 +64,47 @@ def root():
 
 
 @app.get("/activities")
-def get_activities():
-    return activities
+def get_activities(category: Optional[str] = None, search: Optional[str] = None):
+    """Get all activities with optional filtering"""
+    filtered_activities = activities.copy()
+    
+    # Filter by category if provided
+    if category:
+        filtered_activities = {
+            name: details for name, details in filtered_activities.items()
+            if details.get("category") == category
+        }
+    
+    # Filter by search term if provided
+    if search:
+        search_lower = search.lower()
+        filtered_activities = {
+            name: details for name, details in filtered_activities.items()
+            if search_lower in name.lower() or search_lower in details.get("description", "").lower()
+        }
+    
+    return filtered_activities
+
+
+@app.post("/login")
+def login(email: str, password: str):
+    """Login endpoint for teachers"""
+    if verify_teacher(email, password):
+        return {"authenticated": True, "message": "Login successful"}
+    else:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
-    """Sign up a student for an activity"""
+def signup_for_activity(activity_name: str, email: str, teacher_email: Optional[str] = None, teacher_password: Optional[str] = None):
+    """Sign up a student for an activity - requires teacher authentication"""
+    # Verify teacher authentication
+    if not teacher_email or not teacher_password:
+        raise HTTPException(status_code=401, detail="Teacher authentication required")
+    
+    if not verify_teacher(teacher_email, teacher_password):
+        raise HTTPException(status_code=401, detail="Invalid teacher credentials")
+    
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -107,12 +121,20 @@ def signup_for_activity(activity_name: str, email: str):
 
     # Add student
     activity["participants"].append(email)
+    save_activities(activities)
     return {"message": f"Signed up {email} for {activity_name}"}
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
-    """Unregister a student from an activity"""
+def unregister_from_activity(activity_name: str, email: str, teacher_email: Optional[str] = None, teacher_password: Optional[str] = None):
+    """Unregister a student from an activity - requires teacher authentication"""
+    # Verify teacher authentication
+    if not teacher_email or not teacher_password:
+        raise HTTPException(status_code=401, detail="Teacher authentication required")
+    
+    if not verify_teacher(teacher_email, teacher_password):
+        raise HTTPException(status_code=401, detail="Invalid teacher credentials")
+    
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -129,4 +151,5 @@ def unregister_from_activity(activity_name: str, email: str):
 
     # Remove student
     activity["participants"].remove(email)
+    save_activities(activities)
     return {"message": f"Unregistered {email} from {activity_name}"}
